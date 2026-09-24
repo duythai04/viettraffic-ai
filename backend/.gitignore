@@ -1,3 +1,13 @@
 .env
-.venv/
+.env.*
+!.env.example
+
 __pycache__/
+*.py[cod]
+.venv/
+venv/
+
+data/embeddings/chroma_db/
+data/embeddings/chroma_db_building/
+data/embeddings/chroma_db_backup/
+data/processed/ocr/

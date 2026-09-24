@@ -2,61 +2,122 @@
 import sys
 from pathlib import Path
 
-
-# Thêm backend vào Python path
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 sys.path.insert(0, str(BACKEND_DIR))
 
+from app.services.rag.rag_chain import ask_rag
 
-from app.services.rag.pipeline import ask_viettraffic
 
+def test_rag():
 
-def main():
+    print("\n========================================")
+    print("         VIETTRAFFIC AI - RAG TEST")
+    print("========================================")
 
-    print("\n================================")
-    print("       VIETTRAFFIC AI")
-    print("================================")
+    questions = [
+        "Vượt đèn đỏ bằng xe máy bị xử phạt thế nào?",
+        "Nghị định 238 sửa đổi những nội dung nào của Nghị định 168?",
+        "Quy định về việc chở trẻ em trên ô tô là gì?",
+    ]
 
-    while True:
+    for index, question in enumerate(questions, start=1):
 
-        question = input(
-            "\nBạn: "
-        ).strip()
-
-        if question.lower() in [
-            "exit",
-            "quit",
-            "thoat"
-        ]:
-            print("Đã thoát VietTraffic AI.")
-            break
-
-        if not question:
-            continue
+        print("\n" + "=" * 65)
+        print(f"CÂU HỎI {index}: {question}")
+        print("=" * 65)
 
         try:
+            result = ask_rag(
+                question=question,
+                top_k=5
+            )
 
-            result = ask_viettraffic(question)
+        except Exception as error:
 
-            print("\nVietTraffic AI:")
-            print(result["answer"])
+            print("\nLỖI KHI CHẠY RAG:")
+            print(type(error).__name__, str(error))
 
-            print("\nNguồn tài liệu truy xuất:")
+            continue
 
-            for source in result["sources"]:
+        print("\n========== CÂU TRẢ LỜI ==========")
+        print(result["answer"])
 
-                print(
-                    f"- {source['source']} "
-                    f"(Trang {source['page']})"
-                )
+        print("\n========== NGUỒN ĐƯỢC LLM TRÍCH DẪN ==========")
 
-        except Exception as e:
+        cited_sources = result.get("sources", [])
 
-            print("\nCó lỗi xảy ra:")
-            print(type(e).__name__)
-            print(str(e))
+        if not cited_sources:
+            print("Không có nguồn được trích dẫn.")
+
+        for source in cited_sources:
+
+            print(
+                f"[{source.get('id')}] "
+                f"{source.get('filename')} "
+                f"| Trang {source.get('page')}"
+            )
+
+        print("\n========== NGUỒN ĐƯA VÀO CONTEXT ==========")
+
+        retrieved_sources = result.get(
+            "retrieved_sources",
+            []
+        )
+
+        for source in retrieved_sources:
+
+            distance = source.get("distance")
+
+            distance_display = (
+                f"{distance:.4f}"
+                if isinstance(distance, (int, float))
+                else "N/A"
+            )
+
+            print(
+                f"[{source.get('id')}] "
+                f"{source.get('filename')} "
+                f"| Trang {source.get('page')} "
+                f"| Distance: {distance_display}"
+            )
+
+        print("\n========== THỐNG KÊ ==========")
+
+        print(
+            "Số chunks truy xuất:",
+            result.get("retrieved_count", 0)
+        )
+
+        print(
+            "Số chunks đưa vào context:",
+            len(retrieved_sources)
+        )
+
+        print(
+            "Số nguồn được trích dẫn:",
+            len(cited_sources)
+        )
+
+        usage = result.get("usage")
+
+        if usage:
+
+            print(
+                "Input tokens:",
+                usage.get("prompt_tokens")
+            )
+
+            print(
+                "Output tokens:",
+                usage.get("completion_tokens")
+            )
+
+            print(
+                "Total tokens:",
+                usage.get("total_tokens")
+            )
 
 
 if __name__ == "__main__":
-    main()
+    test_rag()

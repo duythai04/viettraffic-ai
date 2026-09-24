@@ -1,6 +1,8 @@
 
+import json
 import shutil
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 from langchain_community.document_loaders import (
@@ -13,24 +15,20 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 
 
-
+# ============================================================
+# 1. CẤU HÌNH ĐƯỜNG DẪN
+# ============================================================
 
 BASE_DIR = Path(__file__).resolve().parents[4]
 
 RAW_DATA_DIR = BASE_DIR / "data" / "raw"
 
-VECTOR_DB_DIR = (
-    BASE_DIR / "data" / "embeddings" / "chroma_db"
-)
+OCR_DATA_DIR = BASE_DIR / "data" / "processed" / "ocr"
 
-# Database tạm để tránh xóa database cũ trước khi ingest thành công
-TEMP_VECTOR_DB_DIR = (
-    BASE_DIR / "data" / "embeddings" / "chroma_db_building"
-)
+EMBEDDINGS_DIR = BASE_DIR / "data" / "embeddings"
 
-BACKUP_VECTOR_DB_DIR = (
-    BASE_DIR / "data" / "embeddings" / "chroma_db_backup"
-)
+# File này lưu đường dẫn database đang được sử dụng.
+ACTIVE_DB_CONFIG = EMBEDDINGS_DIR / "active_db.json"
 
 EMBEDDING_MODEL_NAME = (
     "bkai-foundation-models/vietnamese-bi-encoder"
@@ -39,9 +37,9 @@ EMBEDDING_MODEL_NAME = (
 SUPPORTED_EXTENSIONS = {".pdf", ".txt", ".docx"}
 
 
-
-#  TÌM TÀI LIỆU
-
+# ============================================================
+# 2. TÌM TÀI LIỆU
+# ============================================================
 
 def discover_files(data_dir: Path):
 
@@ -57,13 +55,13 @@ def discover_files(data_dir: Path):
             if file.is_file()
             and file.suffix.lower() in SUPPORTED_EXTENSIONS
         ),
-        key=lambda file: str(file).lower()
+        key=lambda file: str(file).lower(),
     )
 
     print("\n========== KIỂM TRA ĐƯỜNG DẪN ==========")
     print("BASE_DIR:", BASE_DIR)
     print("RAW_DATA_DIR:", RAW_DATA_DIR)
-    print("VECTOR_DB_DIR:", VECTOR_DB_DIR)
+    print("OCR_DATA_DIR:", OCR_DATA_DIR)
 
     print("\n========== FILE ĐƯỢC TÌM THẤY ==========")
 
@@ -80,9 +78,58 @@ def discover_files(data_dir: Path):
     return files
 
 
+# ============================================================
+# 3. CHỌN FILE OCR
+# ============================================================
 
-#  ĐỌC TÀI LIỆU
+def resolve_document_path(file: Path):
 
+    """
+    Nếu file PDF gốc có bản OCR tương ứng thì sử dụng bản OCR.
+
+    Ví dụ:
+        data/raw/decrees/238-ndcp.signed.pdf
+
+    Sẽ sử dụng:
+        data/processed/ocr/238-ndcp.ocr.pdf
+
+    Nếu chưa có bản OCR, trả về file gốc.
+    """
+
+    if file.suffix.lower() != ".pdf":
+        return file
+
+    # Chỉ áp dụng quy tắc OCR cho file trong thư mục decrees.
+    relative_path = file.relative_to(RAW_DATA_DIR)
+
+    if not relative_path.parts or relative_path.parts[0] != "decrees":
+        return file
+
+    filename = file.name
+
+    if filename.endswith(".signed.pdf"):
+        ocr_filename = filename.replace(
+            ".signed.pdf",
+            ".ocr.pdf",
+        )
+    else:
+        ocr_filename = file.stem + ".ocr.pdf"
+
+    ocr_file = OCR_DATA_DIR / ocr_filename
+
+    if ocr_file.exists():
+        print(f"  -> Sử dụng bản OCR: {ocr_file.name}")
+        return ocr_file
+
+    print(f"  -> Chưa có bản OCR: {ocr_filename}")
+    print("  -> Thử đọc PDF gốc.")
+
+    return file
+
+
+# ============================================================
+# 4. ĐỌC TÀI LIỆU
+# ============================================================
 
 def load_documents(data_dir: Path):
 
@@ -98,19 +145,26 @@ def load_documents(data_dir: Path):
 
         try:
 
-            extension = file.suffix.lower()
+            actual_file = resolve_document_path(file)
+
+            extension = actual_file.suffix.lower()
 
             if extension == ".pdf":
-                loader = PyPDFLoader(str(file))
+                loader = PyPDFLoader(str(actual_file))
 
             elif extension == ".txt":
                 loader = TextLoader(
-                    str(file),
-                    encoding="utf-8"
+                    str(actual_file),
+                    encoding="utf-8",
                 )
 
             elif extension == ".docx":
-                loader = Docx2txtLoader(str(file))
+                loader = Docx2txtLoader(str(actual_file))
+
+            else:
+                raise RuntimeError(
+                    f"Định dạng không hỗ trợ: {extension}"
+                )
 
             loaded_docs = loader.load()
 
@@ -119,11 +173,41 @@ def load_documents(data_dir: Path):
                     "File không trả về trang/tài liệu nào."
                 )
 
-            # Chuẩn hóa metadata để dễ lọc nguồn về sau
-            for doc in loaded_docs:
+            # Loại bỏ các trang không có nội dung.
+            valid_docs = [
+                doc
+                for doc in loaded_docs
+                if doc.page_content.strip()
+            ]
 
-                doc.metadata["source"] = str(file)
+            empty_count = len(loaded_docs) - len(valid_docs)
 
+            print(
+                f"  -> Tổng số trang/tài liệu: {len(loaded_docs)}"
+            )
+
+            print(
+                f"  -> Có nội dung: {len(valid_docs)}"
+            )
+
+            print(
+                f"  -> Rỗng: {empty_count}"
+            )
+
+            # Không được âm thầm bỏ qua một tài liệu hoàn toàn rỗng.
+            if not valid_docs:
+                raise RuntimeError(
+                    "Tài liệu không có văn bản để embedding. "
+                    "Nếu là PDF scan, cần OCR trước."
+                )
+
+            # Chuẩn hóa metadata.
+            for doc in valid_docs:
+
+                # source trỏ đến file thực tế được đọc.
+                doc.metadata["source"] = str(actual_file)
+
+                # Giữ tên tài liệu gốc để hiển thị nguồn.
                 doc.metadata["filename"] = file.name
 
                 doc.metadata["relative_path"] = (
@@ -136,31 +220,46 @@ def load_documents(data_dir: Path):
                     else "other"
                 )
 
-            documents.extend(loaded_docs)
+                doc.metadata["is_ocr"] = (
+                    actual_file != file
+                )
+
+                doc.metadata["original_source"] = str(file)
+
+            documents.extend(valid_docs)
 
             print(
-                f"  -> THÀNH CÔNG: {len(loaded_docs)} trang/tài liệu"
+                f"  -> THÀNH CÔNG: {len(valid_docs)} "
+                "trang/tài liệu có nội dung"
             )
 
         except Exception as error:
 
-            print(f"  -> LỖI: {type(error).__name__}")
-            print(f"  -> Chi tiết: {error}")
+            print(
+                f"  -> LỖI: {type(error).__name__}"
+            )
 
-            # Không tiếp tục xây DB nếu thiếu bất kỳ file nào
+            print(
+                f"  -> Chi tiết: {error}"
+            )
+
             raise RuntimeError(
                 f"Không thể đọc tài liệu: {relative_path}"
             ) from error
 
     print("\n========== KẾT QUẢ ĐỌC TÀI LIỆU ==========")
-    print("Tổng số trang/tài liệu:", len(documents))
+
+    print(
+        "Tổng số trang/tài liệu có nội dung:",
+        len(documents),
+    )
 
     return documents
 
 
-
-#  CHIA CHUNKS
-
+# ============================================================
+# 5. CHIA CHUNKS
+# ============================================================
 
 def split_documents(documents):
 
@@ -173,11 +272,18 @@ def split_documents(documents):
             "\n\n",
             "\n",
             " ",
-            ""
-        ]
+            "",
+        ],
     )
 
     chunks = text_splitter.split_documents(documents)
+
+    # Bảo đảm không lưu chunk rỗng.
+    chunks = [
+        chunk
+        for chunk in chunks
+        if chunk.page_content.strip()
+    ]
 
     if not chunks:
         raise RuntimeError(
@@ -185,6 +291,7 @@ def split_documents(documents):
         )
 
     print("\n========== KẾT QUẢ CHIA CHUNKS ==========")
+
     print("Tổng số chunks:", len(chunks))
 
     counts = Counter(
@@ -198,9 +305,9 @@ def split_documents(documents):
     return chunks
 
 
-
-#  TẠO VECTOR DATABASE
-
+# ============================================================
+# 6. TẠO VECTOR DATABASE
+# ============================================================
 
 def build_vector_store():
 
@@ -208,39 +315,43 @@ def build_vector_store():
     print("       VIETTRAFFIC AI - INGESTION")
     print("========================================")
 
-    # Bước 1: Đọc toàn bộ tài liệu
+    # Bước 1: Đọc toàn bộ tài liệu.
     documents = load_documents(RAW_DATA_DIR)
 
-    # Bước 2: Chia chunks
+    # Bước 2: Chia chunks.
     chunks = split_documents(documents)
 
-    # Bước 3: Khởi tạo embedding model
+    # Bước 3: Khởi tạo embedding model.
     print("\nĐang khởi tạo embedding model...")
 
     embeddings = HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL_NAME,
-        model_kwargs={"device": "cpu"}
+        model_kwargs={"device": "cpu"},
     )
 
-    # Bước 4: Dọn database tạm của lần chạy trước
-    if TEMP_VECTOR_DB_DIR.exists():
-        shutil.rmtree(TEMP_VECTOR_DB_DIR)
-
-    TEMP_VECTOR_DB_DIR.parent.mkdir(
+    # Bước 4: Tạo đường dẫn database mới.
+    EMBEDDINGS_DIR.mkdir(
         parents=True,
-        exist_ok=True
+        exist_ok=True,
     )
+
+    timestamp = datetime.now().strftime(
+        "%Y%m%d_%H%M%S_%f"
+    )
+
+    new_db_dir = EMBEDDINGS_DIR / f"chroma_db_{timestamp}"
 
     print("\nĐang tạo ChromaDB mới...")
+    print("Đường dẫn:", new_db_dir)
 
-    # Bước 5: Tạo database ở thư mục tạm
+    # Bước 5: Tạo database mới, không đụng vào DB cũ.
     vector_db = Chroma.from_documents(
         documents=chunks,
         embedding=embeddings,
-        persist_directory=str(TEMP_VECTOR_DB_DIR)
+        persist_directory=str(new_db_dir),
     )
 
-    # Bước 6: Kiểm tra số lượng chunks đã lưu
+    # Bước 6: Kiểm tra số lượng chunks.
     saved_count = vector_db._collection.count()
 
     print("Số chunks đã lưu:", saved_count)
@@ -251,29 +362,37 @@ def build_vector_store():
             "với số chunks đã tạo."
         )
 
-    # Giải phóng kết nối trước khi đổi thư mục trên Windows
-    del vector_db
+    # Bước 7: Cập nhật đường dẫn DB đang sử dụng.
+    # Chỉ thực hiện sau khi DB mới được tạo thành công.
+    config = {
+        "persist_directory": str(new_db_dir),
+        "embedding_model": EMBEDDING_MODEL_NAME,
+        "chunk_count": saved_count,
+        "created_at": datetime.now().isoformat(),
+    }
 
-    # Bước 7: Sao lưu database cũ
-    if BACKUP_VECTOR_DB_DIR.exists():
-        shutil.rmtree(BACKUP_VECTOR_DB_DIR)
+    temp_config = EMBEDDINGS_DIR / "active_db.json.tmp"
 
-    if VECTOR_DB_DIR.exists():
-        VECTOR_DB_DIR.rename(BACKUP_VECTOR_DB_DIR)
-
-    # Bước 8: Đưa database mới vào vị trí chính thức
     try:
 
-        TEMP_VECTOR_DB_DIR.rename(VECTOR_DB_DIR)
+        temp_config.write_text(
+            json.dumps(
+                config,
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        # Thay thế file cấu hình, không đổi tên thư mục SQLite.
+        temp_config.replace(ACTIVE_DB_CONFIG)
 
     except Exception:
 
-        # Khôi phục database cũ nếu thay thế thất bại
-        if (
-            not VECTOR_DB_DIR.exists()
-            and BACKUP_VECTOR_DB_DIR.exists()
-        ):
-            BACKUP_VECTOR_DB_DIR.rename(VECTOR_DB_DIR)
+        print(
+            "Không thể cập nhật active_db.json. "
+            "Database cũ vẫn được giữ nguyên."
+        )
 
         raise
 
@@ -282,10 +401,13 @@ def build_vector_store():
     print("========================================")
 
     print("Tổng số chunks:", saved_count)
-    print("ChromaDB:", VECTOR_DB_DIR)
+    print("ChromaDB:", new_db_dir)
+    print("Cấu hình:", ACTIVE_DB_CONFIG)
 
-    if BACKUP_VECTOR_DB_DIR.exists():
-        print("Bản sao lưu DB cũ:", BACKUP_VECTOR_DB_DIR)
+    print(
+        "\nLưu ý: Nếu FastAPI đang chạy, hãy khởi động lại "
+        "để retriever nạp database mới."
+    )
 
 
 if __name__ == "__main__":
