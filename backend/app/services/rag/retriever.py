@@ -1,42 +1,86 @@
+
 from pathlib import Path
+from functools import lru_cache
+
 import torch
+
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 
-# Đường dẫn đến Vector DB đã lưu
-BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent
-VECTOR_DB_DIR = BASE_DIR / "data" / "embeddings" / "chroma_db"
-EMBEDDING_MODEL_NAME = "bkai-foundation-models/vietnamese-bi-encoder"
 
-def query_rag(question: str, top_k: int = 3):
+# Đường dẫn tới thư mục gốc dự án
+BASE_DIR = Path(__file__).resolve().parents[4]
+
+VECTOR_DB_DIR = BASE_DIR / "data" / "embeddings" / "chroma_db"
+
+EMBEDDING_MODEL_NAME = (
+    "bkai-foundation-models/vietnamese-bi-encoder"
+)
+
+
+@lru_cache(maxsize=1)
+def get_vector_store():
+
+    if not VECTOR_DB_DIR.exists():
+        raise FileNotFoundError(
+            f"Không tìm thấy ChromaDB tại: {VECTOR_DB_DIR}. "
+            "Hãy chạy ingest.py trước."
+        )
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    
-    # 1. Tải Embeddings Model
+
+    print(f"Embedding device: {device}")
+
     embeddings = HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL_NAME,
-        model_kwargs={'device': device}
+        model_kwargs={"device": device}
     )
-    
-    # 2. Kết nối tới ChromaDB đã được tạo
+
     vector_db = Chroma(
         persist_directory=str(VECTOR_DB_DIR),
         embedding_function=embeddings
     )
-    
-    # 3. Tìm kiếm k kết quả liên quan nhất
-    results = vector_db.similarity_search(question, k=top_k)
-    
-    print(f"\n================ CÂU HỎI: '{question}' ================\n")
-    if not results:
-        print("Không tìm thấy đoạn văn bản luật nào phù hợp trong Vector DB!")
-        return
 
-    for i, doc in enumerate(results, 1):
-        source = doc.metadata.get('source', 'Không rõ')
-        page = doc.metadata.get('page', 'N/A')
-        print(f"--- [Kết quả {i}] | Nguồn: {source} (Trang {page}) ---")
-        print(doc.page_content.strip())
-        print("-" * 60 + "\n")
+    return vector_db
+
+
+def retrieve_documents(question: str, top_k: int = 5):
+
+    if not question.strip():
+        return []
+
+    vector_db = get_vector_store()
+
+    results = vector_db.similarity_search_with_score(
+        query=question,
+        k=top_k
+    )
+
+    documents = []
+
+    for doc, score in results:
+
+        documents.append({
+            "content": doc.page_content,
+            "source": doc.metadata.get("source", "Không rõ"),
+            "page": doc.metadata.get("page"),
+            "score": float(score),
+            "metadata": doc.metadata
+        })
+
+    return documents
+
 
 if __name__ == "__main__":
-    query_rag("Mức phạt vượt đèn đỏ xe máy là bao nhiêu?")
+
+    question = "Vượt đèn đỏ bằng xe máy bị xử phạt thế nào?"
+
+    results = retrieve_documents(question)
+
+    for index, doc in enumerate(results, start=1):
+
+        print(f"\n===== KẾT QUẢ {index} =====")
+        print("Nguồn:", doc["source"])
+        print("Trang:", doc["page"])
+        print("Distance:", doc["score"])
+        print(doc["content"])
