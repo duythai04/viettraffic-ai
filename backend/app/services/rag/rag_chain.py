@@ -6,6 +6,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import OpenAI
+from .legal_retriever import retrieve_legal_documents
 
 try:
     from .retriever import (
@@ -37,11 +38,11 @@ MODEL_NAME = os.getenv(
 )
 
 # Giới hạn ký tự context, không phải giới hạn token.
-MAX_CONTEXT_CHARS = 45000
+MAX_CONTEXT_CHARS = 55000
 
 # Mỗi lần lấy thêm context, ưu tiên giữ nguyên
 # toàn bộ chunk thay vì cắt giữa một điều khoản.
-MAX_SINGLE_CHUNK_CHARS = 5000
+MAX_SINGLE_CHUNK_CHARS = 30000
 
 
 if not OPENAI_API_KEY:
@@ -258,9 +259,11 @@ def ask_rag(
 
     analysis = analyze_question(question)
 
-    documents = retrieve_documents(
+    documents = retrieve_legal_documents(
         question=question,
-        top_k=top_k
+        top_k=top_k,
+        article_top_k=2
+
     )
 
     print(
