@@ -1,16 +1,5 @@
-
-import sys
-
-from pathlib import Path
-
-BACKEND_DIR = Path(__file__).resolve().parents[1]
-
-sys.path.insert(
-    0,
-    str(BACKEND_DIR)
-)
-
-from app.services.rag.legal_retriever import (
+from backend.app.services.rag.legal_retriever import (
+    analyze_question,
     search_legal_articles,
     retrieve_legal_documents,
 )
@@ -19,92 +8,198 @@ from app.services.rag.legal_retriever import (
 QUESTIONS = [
     "Vượt đèn đỏ bằng xe máy bị xử phạt thế nào?",
     "Vượt đèn đỏ bằng ô tô bị xử phạt thế nào?",
-    "Nghị định 238 sửa đổi những nội dung nào của Nghị định 168?",
+    "Chở trẻ em dưới 10 tuổi trên ô tô cần tuân thủ quy định gì?",
+    "Xe máy chạy quá tốc độ bị phạt thế nào?",
 ]
 
 
-def test_legal_retriever():
+def print_line():
+    print(
+        "\n"
+        + "=" * 90
+    )
 
-    for question in QUESTIONS:
 
-        print("\n" + "=" * 70)
+for question in QUESTIONS:
 
-        print("CÂU HỎI:", question)
+    print_line()
 
-        print("=" * 70)
+    print(
+        "QUESTION:"
+    )
 
-        articles = search_legal_articles(
-            question=question,
-            top_k=3
-        )
+    print(
+        question
+    )
 
-        print("\n========== ĐIỀU LUẬT ==========")
+    # ========================================================
+    # QUESTION ANALYSIS
+    # ========================================================
 
-        for article in articles:
+    analysis = analyze_question(
+        question
+    )
 
-            print(
-                f"\n{article['filename']}"
-            )
+    print(
+        "\nANALYSIS:"
+    )
 
-            print(
-                f"Điều {article['article_number']}"
-            )
+    print(
+        analysis
+    )
 
-            print(
-                article["article_title"]
-            )
+    # ========================================================
+    # ARTICLE SEARCH
+    # ========================================================
 
-            print(
-                "Trang:",
-                article["start_page"],
-                "-",
-                article["end_page"]
-            )
+    articles = search_legal_articles(
+        question=question,
+        top_k=3
+    )
 
-            print(
-                "Legal score:",
-                article["legal_score"]
-            )
+    print(
+        "\nARTICLES:"
+    )
 
-            print(
-                "\nNội dung mẫu:"
-            )
-
-            print(
-                article["content"][:800]
-            )
-
-        documents = retrieve_legal_documents(
-            question=question,
-            top_k=5,
-            article_top_k=2
-        )
-
-        print("\n========== KẾT QUẢ GỘP ==========")
+    for article in articles:
 
         print(
-            "Tổng số tài liệu:",
-            len(documents)
+            f"- {article['filename']}"
+            f" | Điều {article['article_number']}"
+            f" | score={article['legal_score']}"
+            f" | vehicle={article['article_vehicle']}"
         )
 
-        for index, document in enumerate(
-            documents[:8],
-            start=1
-        ):
+        clauses = article.get(
+            "relevant_clauses",
+            []
+        )
 
-            metadata = document.get(
+        for clause in clauses:
+
+            print(
+                f"    Khoản "
+                f"{clause['clause_number']}"
+                f" | score="
+                f"{clause['match_score']}"
+            )
+
+            points = clause.get(
+                "relevant_points",
+                []
+            )
+
+            for point in points:
+
+                print(
+                    f"        Điểm "
+                    f"{point['point_label']}"
+                    f" | score="
+                    f"{point['match_score']}"
+                )
+
+                preview = (
+                    point.get(
+                        "content",
+                        ""
+                    )
+                    .replace(
+                        "\n",
+                        " "
+                    )
+                )
+
+                print(
+                    "        ",
+                    preview[:250]
+                )
+
+    # ========================================================
+    # FINAL DOCUMENTS
+    # ========================================================
+
+    documents = retrieve_legal_documents(
+        question=question,
+        top_k=5,
+        article_top_k=3
+    )
+
+    print(
+        "\nFINAL DOCUMENTS:"
+    )
+
+    for index, document in enumerate(
+        documents,
+        start=1
+    ):
+
+        metadata = (
+            document.get(
                 "metadata",
                 {}
             )
+            or {}
+        )
 
-            print(
-                f"{index}. "
-                f"{document['filename']} | "
-                f"Trang {document['page']} | "
-                f"Loại: {metadata.get('retrieval_type', 'semantic')}"
+        print()
+        print(
+            f"[{index}]",
+            document.get(
+                "filename"
             )
+        )
 
+        print(
+            "Type:",
+            metadata.get(
+                "retrieval_type",
+                "semantic"
+            )
+        )
 
-if __name__ == "__main__":
+        print(
+            "Điều:",
+            metadata.get(
+                "article_number"
+            )
+        )
 
-    test_legal_retriever()
+        print(
+            "Khoản:",
+            metadata.get(
+                "clause_number"
+            )
+        )
+
+        print(
+            "Điểm:",
+            metadata.get(
+                "point_label"
+            )
+        )
+
+        print(
+            "Trang:",
+            metadata.get(
+                "start_page",
+                document.get(
+                    "page"
+                )
+            )
+        )
+
+        content = (
+            document.get(
+                "content",
+                ""
+            )
+            .replace(
+                "\n",
+                " "
+            )
+        )
+
+        print(
+            "Content:",
+            content[:400]
+        )
