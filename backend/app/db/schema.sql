@@ -5,9 +5,8 @@ COLLATE utf8mb4_unicode_ci;
 USE viettraffic_ai;
 
 
--- =============================================
--- 1. USERS
--- =============================================
+
+ -- 1. user
 
 CREATE TABLE users (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -26,9 +25,8 @@ CREATE TABLE users (
 );
 
 
--- =============================================
--- 2. CONVERSATIONS
--- =============================================
+
+-- 2. conversations
 
 CREATE TABLE conversations (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -51,9 +49,8 @@ CREATE INDEX idx_conversations_user
 ON conversations(user_id);
 
 
--- =============================================
--- 3. MESSAGES
--- =============================================
+
+-- 3. msssages
 
 CREATE TABLE messages (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -97,9 +94,9 @@ CREATE INDEX idx_messages_created
 ON messages(created_at);
 
 
--- =============================================
--- 4. LEGAL DOCUMENTS
--- =============================================
+
+
+-- 4. legal documents
 
 CREATE TABLE legal_documents (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -140,11 +137,7 @@ CREATE INDEX idx_legal_document_status
 ON legal_documents(status);
 
 
--- =============================================
--- 5. MESSAGE SOURCES
--- Nguồn pháp luật mà AI sử dụng cho câu trả lời
--- =============================================
-
+-- 5. message sources
 CREATE TABLE message_sources (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
 
@@ -180,9 +173,7 @@ CREATE INDEX idx_message_sources_message
 ON message_sources(message_id);
 
 
--- =============================================
--- 6. FEEDBACKS
--- =============================================
+-- 6. feedbacks
 
 CREATE TABLE feedbacks (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -213,9 +204,7 @@ CREATE TABLE feedbacks (
 );
 
 
--- =============================================
--- 7. RAG LOGS
--- =============================================
+-- 7. rag log
 
 CREATE TABLE rag_logs (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
